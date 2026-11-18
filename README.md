@@ -6,6 +6,28 @@ PulmoScan is a clinical AI decision-support system for **tuberculosis (TB) detec
 
 ---
 
+## 0. Project Objective → Implementation Trace
+
+> **Stated objective:** develop an AI-based system for early tuberculosis detection from chest X-ray images that **(a)** provides accurate disease predictions, **(b)** highlights affected regions for better interpretation, and **(c)** enables collaborative learning across multiple healthcare centers.
+
+Every requirement is implemented. Direct code pointers:
+
+| Requirement | How it's realized | Where in code |
+|---|---|---|
+| **Early TB detection from CXR** | ResNet-18 (torchvision) with a 2-class head (`TB_Positive`, `TB_Negative`), loaded lazily from the current FL checkpoint. Input accepts DICOM / JPEG / PNG / WebP. An upstream **OOD gatekeeper ResNet-18** rejects non-chest images (abdominal CT, derma, blank/corrupted) *before* the TB model runs, so predictions are only produced on valid CXRs. | `backend/model_inference.py` — `ChestXRayInference`, `_resnet18()`, `predict()` · validator at `Model/models/chest_xray_validator.pth` |
+| **Accurate disease predictions** | Softmax confidence returned per prediction; confidence buckets (0.60 / 0.70 / 0.85 / 0.95) map to TB severity stages 1–4, which in turn drive a WHO-guideline-seeded `care_plan` object (HRZE / 3HP regimens, isolation, follow-up). Clinician sign-off is persisted and corrections feed the active-learning queue so accuracy improves over rounds. | `backend/model_inference.py::predict` (softmax + stage bucketing) · `backend/stages.json` + `_build_care_plan` · `backend/database.py::save_feedback` + `enqueue_active_learning` |
+| **Highlights affected regions** | **Grad-CAM++** over `layer4` of the TB ResNet-18. The extractor computes a gradient-weighted class activation map, overlays it on the input CXR with a JET colormap, and derives **bounding boxes** around high-activation lesion regions. Both `heatmap_base64` (ready-to-render PNG) and `bounding_boxes` are returned in the `/predict` response and rendered by the frontend result page. | `backend/model_inference.py::GradCAMPlusPlusExtractor` (line 69) · overlay at line 152 · bbox derivation at line 158 · `Frontend/src` result page consumer |
+| **Collaborative learning across multiple healthcare centers** | Three "hospital" FL clients (`node_A/B/C`) each hold a private CXR shard (`Model/data/hospital_*`), train locally under **Opacus DP-SGD + FedProx**, and upload only their updated ResNet-18 `state_dict` (SHA-256 integrity-checked) to a central orchestrator. The orchestrator aggregates with **sample-weighted FedAvg** once ≥ `FL_MIN_CLIENTS` nodes have submitted, evaluates the new global model on a held-out central test set, and writes a versioned checkpoint that the inference API picks up on the next request. **No patient images, labels, or identifiers ever leave a hospital node.** | `backend/fl_orchestrator.py` — `_fedavg`, `_execute_central_aggregation`, `submit_update` · `Model/run_hospital_node.py` — download global → FedProx+DP training loop → upload weights · REST endpoints `/api/fl/*` in `backend/main.py` |
+
+Additional capabilities that reinforce the objective but weren't explicitly asked for:
+
+- **HIPAA Safe-Harbor de-identification** of DICOMs (strips 18 PHI tags + irreversibly hashes patient IDs) — `backend/dicom_sanitizer.py`.
+- **Differential privacy** on every edge node — real `ε` reported from `opacus.PrivacyEngine.get_epsilon(δ=1e-5)` rather than a fabricated constant.
+- **FedProx** proximal term (`loss += (μ/2) · Σ‖w − w_global‖²`) stabilizes training when hospital datasets are non-IID.
+- **Audit trail** of every scan, feedback event, and admin action in `backend/feedback.db` (SQLite) — queryable from the admin dashboard.
+
+---
+
 ## 1. Core Usage — What the Project Does
 
 Two workflows run side-by-side:
