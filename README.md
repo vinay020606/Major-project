@@ -164,21 +164,35 @@ Every round the orchestrator broadcasts the current global `state_dict`, each no
 
 ## 5. Quickstart — Run the Whole Stack
 
-### Option A: Docker Compose (recommended)
+> **First-time note.** No model checkpoint is shipped in the repo. `/predict` deliberately returns **HTTP 503 `MODEL_NOT_READY`** until one exists — the previous behavior of silently serving a randomly-initialized ResNet-18 is gone. You seed a real checkpoint either by **running one FL round** (step below) or by dropping a pretrained ResNet-18 `state_dict` at `Model/models/federated_model.pth`. Check readiness anytime with `GET /health`.
+
+### Option A: Docker Compose (recommended demo path)
 
 Brings up backend + frontend + three hospital nodes on one `pulmoscan` bridge network.
 
 ```bash
-# from the repo root
+# 1. from the repo root
 docker compose up --build
+
+# 2. open the dashboard
+#    Frontend: http://localhost:5173
+#    Backend : http://localhost:8000/docs
+#    Health  : http://localhost:8000/health   ← should say "model_not_ready" at first
+
+# 3. log in as admin
+#    admin@pulmoscan.org / AdminPass123!
+#    (override with env var PULMOSCAN_ADMIN_PASSWORD BEFORE first startup)
+
+# 4. seed the model
+#    In the admin dashboard, click "Start FL Round".
+#    Hospital node logs will stream local training, then the backend will log:
+#    [AGGREGATION] Real tensor-wise FedAvg complete.
+#    /health now reports "ok" and /predict works.
+
+# 5. use the clinical UI
+#    - Doctor view : upload a CXR → Grad-CAM heatmap + care plan
+#    - Patient view: submit symptom self-assessment, view history, track adherence
 ```
-
-Then:
-- Frontend: http://localhost:5173
-- Backend / Swagger: http://localhost:8000/docs
-- Admin login: `admin@pulmoscan.org` / `AdminPass123!` (override with env var `PULMOSCAN_ADMIN_PASSWORD` **before first startup**)
-
-Click **Start FL Round** in the admin dashboard — logs for all three hospital containers will stream local training, then the backend will log `[AGGREGATION] Real tensor-wise FedAvg complete.`
 
 Shut down with `docker compose down`. Add `-v` to also wipe the SQLite DB + stored inferences + checkpoints.
 
@@ -266,6 +280,7 @@ Note: `/auth/register` **rejects** `role=admin` — admin accounts can only be c
 | `POST /feedback` | Clinician sign-off / correction → active-learning queue |
 | `GET  /care-plan/{stage_id}` | Standalone care pathway lookup (1–4) |
 | `GET  /scans` | List predictions (role-filtered) |
+| `GET  /health` | Reports whether both the TB classifier and validator checkpoints are on disk; UI uses this to flag "model not ready" before the first FL round |
 | `POST /auth/{login,register,logout}` | Session management |
 | `POST /patient/symptoms` | Submit a TB-symptom self-assessment → returns computed risk band |
 | `GET  /patient/symptoms?email=...` | Patient's symptom-assessment history (newest first) |
@@ -300,7 +315,8 @@ Note: `/auth/register` **rejects** `role=admin` — admin accounts can only be c
 
 | Symptom | Likely cause / file |
 |---|---|
-| `/predict` returns 503 | Checkpoint load failure — `backend/model_inference.py` |
+| `/predict` returns 503 `MODEL_NOT_READY` | No TB-classifier checkpoint at `Model/models/federated_model.pth`. Run one FL round (admin → Start FL Round) or drop a pretrained state_dict. Confirm with `GET /health`. |
+| `/predict` returns 503 (other) | Checkpoint load failure — `backend/model_inference.py` |
 | Round hangs at `local_training` | Node container not up, or `API_SERVER` not pointing at a reachable backend |
 | Aggregation never fires | Fewer nodes submitted than `FL_MIN_CLIENTS` |
 | `weight hash mismatch` on upload | Network truncation — `fl_orchestrator.submit_update` |
@@ -319,6 +335,12 @@ Note: `/auth/register` **rejects** `role=admin` — admin accounts can only be c
 - Audit logs no longer write the literal admin password; seed password sourced from env var.
 - DICOM patient-hash salt reads from `PULMOSCAN_PATIENT_HASH_SALT` env with the previous constant as fallback.
 - The `SCAN_ANALYZED` audit event derives user role from the DB record instead of substring-matching `"admin"` in the email.
+
+**Correctness fixes in this branch:**
+- No silent random fallback. `/predict` returns 503 `MODEL_NOT_READY` (not a random prediction) when checkpoints are absent. `GET /health` reports readiness up front.
+- Hospital nodes rebuild a fresh unwrapped ResNet-18 each FL round and load the fetched global `state_dict` into it before Opacus wrapping. Previously round-2 onward silently failed to load (Opacus had prefixed every key with `_module.`) and nodes diverged locally.
+- Doctor-corrected `active_learning_queue` entries are now folded into training via `ActiveLearningDataset` and marked complete on successful upload. The REST FL path previously only trained on the static local folder.
+- `node_C` now resolves to `Model/data/hospital_C/`. Previously it silently aliased to `hospital_B`, so nodes B and C trained on identical data.
 
 **Known deferred items (not yet fixed — PRs welcome):**
 - Bearer tokens are issued but never validated server-side. Any caller can hit `/retrain`, `/admin/*`, `/api/fl/*`, and can read any user's scans by passing `role=doctor` in the query string.

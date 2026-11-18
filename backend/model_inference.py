@@ -27,17 +27,27 @@ def _resnet18() -> nn.Module:
     return model
 
 
-def _ensure_checkpoint_exists(path: Path, is_validator: bool = False) -> None:
-    """If model checkpoint is missing, initializes and saves a functional checkpoint for testing/demo."""
-    if path.is_file():
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    model = _resnet18()
-    torch.save(model.state_dict(), str(path))
+class CheckpointMissingError(RuntimeError):
+    """Raised when a required model checkpoint is not present on disk.
+
+    The predict path catches this and returns a 503 with a clear remediation
+    message instead of silently serving a randomly-initialized model.
+    """
+
+    def __init__(self, path: Path, is_validator: bool):
+        kind = "chest-X-ray OOD validator" if is_validator else "TB classifier"
+        super().__init__(
+            f"{kind} checkpoint missing at {path}. "
+            "Run an FL training round to seed Model/models/federated_model.pth, "
+            "or drop a pretrained state_dict at this path before serving requests."
+        )
+        self.path = path
+        self.is_validator = is_validator
 
 
 def _load_state_dict(path: Path, is_validator: bool = False) -> nn.Module:
-    _ensure_checkpoint_exists(path, is_validator=is_validator)
+    if not path.is_file():
+        raise CheckpointMissingError(path, is_validator)
     model = _resnet18()
     # weights_only=False so we can transparently accept both a bare state_dict
     # and the {"model_state": sd, "meta": {...}} wrapper written by the FL

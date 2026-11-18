@@ -202,21 +202,37 @@ def load_hospital_dataset(path_input: Optional[str], default_dir: Path, tfms) ->
     neg_count = 0
     valid_exts = {".png", ".jpg", ".jpeg", ".bmp", ".dcm", ".dicom", ".tif", ".tiff", ".webp"}
 
-    # Case A: Standard class subfolders (e.g. TB_Positive/TB_Negative, Normal/Tuberculosis)
+    # Case A: Standard class subfolders (e.g. TB_Positive/TB_Negative, Normal/Tuberculosis).
+    # Use ActiveLearningDataset so doctor-corrected feedback from the central
+    # SQLite queue is folded into training alongside the base hospital shard.
     subdirs = [d for d in target_path.iterdir() if d.is_dir()] if target_path.is_dir() else []
     if len(subdirs) >= 2:
         try:
-            from torchvision import datasets
-            ds = datasets.ImageFolder(str(target_path), transform=tfms)
+            ds = ActiveLearningDataset(base_dir=str(target_path), transform=tfms)
             for sdir in subdirs:
                 c = len([f for f in sdir.glob("*") if f.suffix.lower() in valid_exts])
                 if any(k in sdir.name.lower() for k in ["pos", "tb", "tuberculosis", "sick"]):
                     pos_count += c
                 else:
                     neg_count += c
+            al_count = len(getattr(ds, "pending_prediction_ids", []) or [])
+            if al_count:
+                print(f"[DATA] Active-learning queue contributed {al_count} doctor-corrected samples.")
             return ds, str(target_path), pos_count, neg_count
-        except Exception:
-            pass
+        except Exception as err:
+            print(f"[DATA] ActiveLearningDataset load failed ({err}); falling back to plain ImageFolder.")
+            try:
+                from torchvision import datasets
+                ds = datasets.ImageFolder(str(target_path), transform=tfms)
+                for sdir in subdirs:
+                    c = len([f for f in sdir.glob("*") if f.suffix.lower() in valid_exts])
+                    if any(k in sdir.name.lower() for k in ["pos", "tb", "tuberculosis", "sick"]):
+                        pos_count += c
+                    else:
+                        neg_count += c
+                return ds, str(target_path), pos_count, neg_count
+            except Exception:
+                pass
 
     # Case B: Flat directory containing CXR image files directly
     if target_path.is_dir():
@@ -321,9 +337,25 @@ def main():
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
 
-    default_dir = MODEL_DIR / "data" / ("hospital_A" if args.node_id == "node_A" else "hospital_B")
+    node_to_dir = {
+        "node_A": "hospital_A",
+        "node_B": "hospital_B",
+        "node_C": "hospital_C",
+    }
+    hospital_folder = node_to_dir.get(args.node_id, "hospital_A")
+    default_dir = MODEL_DIR / "data" / hospital_folder
     if not default_dir.exists():
-        default_dir = MODEL_DIR / "data" / "valid_chest_xray" / "train"
+        # Fall back to the held-out training corpus; previously everything other
+        # than node_A silently reused hospital_B, which made node_B and node_C
+        # train on identical data and poisoned the FedAvg diversity signal.
+        fallback = MODEL_DIR / "data" / "valid_chest_xray" / "train"
+        print(
+            f"{YELLOW}[DATA] WARNING: default shard {default_dir} not found for "
+            f"{args.node_id}; falling back to {fallback}. Create "
+            f"Model/data/{hospital_folder}/ with TB_Positive/TB_Negative subfolders "
+            f"to give this node its own shard.{RESET}"
+        )
+        default_dir = fallback
 
     selected_data_path = args.data_dir
     if not selected_data_path:
@@ -463,16 +495,30 @@ def main():
 
                 print(f"\n" + "-" * 58)
                 print(f"{BOLD}[FL] Round #{current_round_num} started across cluster{RESET}")
+                # Rebuild a fresh unwrapped ResNet-18 + optimizer each round. Previous
+                # rounds may have replaced `model` with an Opacus GradSampleModule
+                # whose state_dict keys are prefixed with `_module.*`; loading the
+                # server's bare-keyed state_dict into that silently did nothing
+                # (strict=False) and nodes diverged from round 2 onward.
+                model = get_resnet18(pretrained=False, privacy_preserving=args.dp).to(device)
+                optimizer = torch.optim.Adam(
+                    filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4
+                )
+
                 print(f"[MODEL] Fetching Global Model {global_version} state_dict from Central Server...")
                 fetched_sd = fetch_global_state_dict(args.api_server)
                 if fetched_sd is not None:
                     try:
-                        model.load_state_dict(fetched_sd, strict=False)
+                        missing, unexpected = model.load_state_dict(fetched_sd, strict=False)
+                        if unexpected:
+                            print(f"[MODEL] WARNING: {len(unexpected)} unexpected keys skipped (e.g. {unexpected[:2]}).")
+                        if missing:
+                            print(f"[MODEL] WARNING: {len(missing)} params not populated from global (e.g. {missing[:2]}); keeping init values.")
                         print(f"[MODEL] Global model {global_version} weights loaded into local ResNet-18 ✓")
                     except Exception as err:
-                        print(f"[MODEL] WARNING: load_state_dict failed ({err}); continuing with current local weights.")
+                        print(f"[MODEL] WARNING: load_state_dict failed ({err}); continuing with freshly-initialized local weights.")
                 else:
-                    print(f"[MODEL] Proceeding with current local weights (download failed).")
+                    print(f"[MODEL] Proceeding with freshly-initialized local weights (download failed).")
 
                 # Snapshot w_global for the FedProx proximal term BEFORE any local step.
                 w_global_snapshot = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
@@ -496,6 +542,8 @@ def main():
 
                 # Per-round Opacus attachment. The engine wraps model/optimizer/loader
                 # in-place via make_private, so we rebind to the returned instances.
+                # The outer `model` and `optimizer` are rebuilt from scratch above,
+                # so each round starts clean (no accumulated GradSampleModule wrapping).
                 round_optimizer = optimizer
                 round_data_loader = torch.utils.data.DataLoader(active_dataset, batch_size=args.batch_size, shuffle=True)
                 round_privacy_engine = None
@@ -654,6 +702,17 @@ def main():
                 )
 
                 print(f"[UPLOAD] Central Server accepted weight vector ✓")
+
+                # Mark the doctor-corrected active-learning samples that fed this
+                # round as trained, so they are not re-weighted into the next one.
+                pending_ids = list(getattr(active_dataset, "pending_prediction_ids", []) or [])
+                if pending_ids and upload_res and upload_res.get("status") != "error":
+                    try:
+                        mark_active_learning_completed(pending_ids)
+                        print(f"[ACTIVE-LEARNING] Marked {len(pending_ids)} doctor-corrected samples as trained.")
+                    except Exception as err:
+                        print(f"[ACTIVE-LEARNING] WARNING: could not mark completed ({err}).")
+
                 next_version = f"v{current_round_num + 1}"
                 print(f"\n[FL] Waiting for Central Server to execute FedAvg aggregation and distribute Global Model {next_version}...")
 

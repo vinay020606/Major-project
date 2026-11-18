@@ -48,9 +48,9 @@ try:
         sanitize_dicom_bytes,
     )
     try:
-        from .model_inference import ChestXRayInference
+        from .model_inference import ChestXRayInference, CheckpointMissingError
     except ImportError:
-        from model_inference import ChestXRayInference
+        from model_inference import ChestXRayInference, CheckpointMissingError
 except ImportError:
     from database import (
         authenticate_user,
@@ -81,7 +81,7 @@ except ImportError:
         is_dicom_file,
         sanitize_dicom_bytes,
     )
-    from model_inference import ChestXRayInference
+    from model_inference import ChestXRayInference, CheckpointMissingError
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -332,6 +332,31 @@ def root() -> dict[str, str]:
     }
 
 
+@app.get("/health")
+def health() -> dict[str, Any]:
+    """Reports whether the inference checkpoints are ready. Lets the UI warn
+    the user up front when the model has not yet been seeded by an FL round."""
+    tb_ready = MODEL_PATH.is_file()
+    validator_ready = VALIDATOR_MODEL_PATH.is_file()
+    return {
+        "status": "ok" if (tb_ready and validator_ready) else "model_not_ready",
+        "tb_classifier": {
+            "ready": tb_ready,
+            "path": str(MODEL_PATH),
+        },
+        "validator": {
+            "ready": validator_ready,
+            "path": str(VALIDATOR_MODEL_PATH),
+        },
+        "remediation": (
+            None
+            if (tb_ready and validator_ready)
+            else "Run a federated training round or drop a pretrained ResNet-18 "
+                 "state_dict at the missing path(s) before calling /predict."
+        ),
+    }
+
+
 @app.get("/stage/{stage_id}")
 def get_stage(stage_id: int) -> dict[str, Any]:
     stage = stage_data.get(str(stage_id))
@@ -564,6 +589,21 @@ async def predict(
         inference_result = _load_inference().predict(image)
     except HTTPException:
         raise
+    except CheckpointMissingError as error:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "MODEL_NOT_READY",
+                "message": str(error),
+                "missing_path": str(error.path),
+                "component": "validator" if error.is_validator else "tb_classifier",
+                "remediation": (
+                    "Trigger an FL round via POST /api/fl/round/start once "
+                    "hospital nodes are online, or drop a pretrained ResNet-18 "
+                    "state_dict at the missing path."
+                ),
+            },
+        ) from error
     except Exception as error:
         raise HTTPException(
             status_code=503, detail=f"Prediction unavailable: {error}"
