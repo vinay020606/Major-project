@@ -621,7 +621,9 @@ async def predict(
 
     confidence = float(inference_result["confidence"])
     is_positive = inference_result["label"] == "Tuberculosis"
-    stage = get_stage_from_confidence(confidence) if is_positive else 0
+    # TB Positive at low confidence (<0.60) still deserves a care plan —
+    # pin to Stage 1 so the UI never shows "TB Positive" with no remediation.
+    stage = max(1, get_stage_from_confidence(confidence)) if is_positive else 0
     result = "TB Positive" if is_positive else "TB Negative"
     prediction_id = str(uuid.uuid4())
 
@@ -920,40 +922,35 @@ def get_fl_metrics() -> dict[str, Any]:
             with FL_METRICS_PATH.open("r", encoding="utf-8") as f:
                 data = json.load(f)
                 data["source"] = "live_cluster"
+                data["is_sample"] = False
                 return data
         except Exception:
             pass
 
+    # No live-training log present. Return an empty history with an honest
+    # source tag so the UI can render an empty state / "run a round first"
+    # banner instead of plotting fabricated numbers that look like real data.
     return {
-        "source": "benchmark",
-        "status": "completed",
+        "source": "no_data",
+        "status": "awaiting_first_round",
+        "is_sample": False,
+        "disclaimer": (
+            "No federated-training metrics have been recorded yet. "
+            "Trigger an FL round via POST /api/fl/round/start, or configure "
+            "Model/logs/fl_metrics.json, to populate this endpoint."
+        ),
         "dp_enabled": True,
         "algorithm": "FedProx (mu=0.01) + Opacus DP-SGD",
-        "total_rounds": 10,
-        "current_round": 10,
+        "total_rounds": 0,
+        "current_round": 0,
         "dp_config": {
             "noise_multiplier": 1.0,
             "max_grad_norm": 1.0,
             "target_delta": 1e-5,
             "target_epsilon": 8.0,
         },
-        "rounds": [
-            {"round": 1, "accuracy": 61.2, "loss": 0.721, "epsilon": 0.42, "delta": 1e-5, "clients": 3},
-            {"round": 2, "accuracy": 67.4, "loss": 0.634, "epsilon": 0.71, "delta": 1e-5, "clients": 3},
-            {"round": 3, "accuracy": 72.1, "loss": 0.578, "epsilon": 0.98, "delta": 1e-5, "clients": 3},
-            {"round": 4, "accuracy": 75.8, "loss": 0.521, "epsilon": 1.24, "delta": 1e-5, "clients": 2},
-            {"round": 5, "accuracy": 78.3, "loss": 0.481, "epsilon": 1.48, "delta": 1e-5, "clients": 3},
-            {"round": 6, "accuracy": 80.9, "loss": 0.443, "epsilon": 1.71, "delta": 1e-5, "clients": 3},
-            {"round": 7, "accuracy": 82.5, "loss": 0.412, "epsilon": 1.93, "delta": 1e-5, "clients": 3},
-            {"round": 8, "accuracy": 84.1, "loss": 0.385, "epsilon": 2.14, "delta": 1e-5, "clients": 3},
-            {"round": 9, "accuracy": 85.6, "loss": 0.361, "epsilon": 2.34, "delta": 1e-5, "clients": 2},
-            {"round": 10, "accuracy": 86.8, "loss": 0.342, "epsilon": 2.53, "delta": 1e-5, "clients": 3},
-        ],
-        "client_stats": [
-            {"id": "node_A", "name": "Hospital A (Urban TB Center)", "location": "Urban Referral", "dataset_size": 3008, "status": "active", "accuracy": 87.2, "loss": 0.338},
-            {"id": "node_B", "name": "Hospital B (Rural Clinic)", "location": "Rural District", "dataset_size": 4200, "status": "active", "accuracy": 85.9, "loss": 0.351},
-            {"id": "node_C", "name": "Hospital C (Research Inst)", "location": "Metro Academic", "dataset_size": 7600, "status": "active", "accuracy": 86.1, "loss": 0.344},
-        ],
+        "rounds": [],
+        "client_stats": [],
     }
 
 

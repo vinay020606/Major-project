@@ -567,8 +567,21 @@ def get_clinical_stats() -> dict[str, Any]:
     }
 
 
+_ALLOWED_SCAN_ROLES = frozenset({"patient", "doctor", "admin"})
+
+
 def get_scans_by_role(role: str, patient_hash: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
-    """Fetches real scan records, applying strict privacy isolation for patients."""
+    """Fetches real scan records, applying strict privacy isolation for patients.
+
+    Any role outside {patient, doctor, admin} returns an empty list. Previously
+    an unrecognized role (e.g. "Patient" with a capital P, or a typo) fell
+    through the if-branch and returned every row in the predictions table.
+    """
+    role_norm = (role or "").strip().lower()
+    if role_norm not in _ALLOWED_SCAN_ROLES:
+        return []
+    if role_norm == "patient" and not patient_hash:
+        return []
     query = """
         SELECT 
             p.prediction_id,
@@ -593,7 +606,7 @@ def get_scans_by_role(role: str, patient_hash: str | None = None, limit: int = 1
     """
     params: list[Any] = []
 
-    if role == "patient" and patient_hash:
+    if role_norm == "patient":
         query += " WHERE (p.patient_hash = ? OR p.uploaded_by_email = ?) "
         params.extend([patient_hash, patient_hash])
 
