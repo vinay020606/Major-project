@@ -113,7 +113,6 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "*",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -371,6 +370,8 @@ def login(creds: LoginInput) -> dict[str, Any]:
 
 @app.post("/auth/register")
 def register(data: RegisterInput) -> dict[str, Any]:
+    if (data.role or "").lower() == "admin":
+        raise HTTPException(status_code=403, detail="Admin accounts cannot self-register.")
     try:
         user = create_user(
             email=data.email,
@@ -537,9 +538,11 @@ async def predict(
         image_path=str(cached_image_path),
     )
 
+    uploader = get_user_by_email(uploaded_by) if uploaded_by else None
+    uploader_role = (uploader or {}).get("role") or "doctor"
     log_audit_event(
         user_email=uploaded_by or "clinician",
-        user_role="doctor" if not uploaded_by or "admin" not in uploaded_by else "admin",
+        user_role=uploader_role,
         action="SCAN_ANALYZED",
         resource_id=prediction_id,
         details=f"Inference: {result} ({round(confidence*100, 1)}%) - Patient: {final_patient_name or final_patient_hash}",

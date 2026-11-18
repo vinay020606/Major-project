@@ -73,7 +73,7 @@ PHI_TAGS_TO_REMOVE = [
     "StudyID",
 ]
 
-SECRET_SALT = "sit_tb_federated_edge_salt_2026"
+SECRET_SALT = os.environ.get("PULMOSCAN_PATIENT_HASH_SALT", "sit_tb_federated_edge_salt_2026")
 
 
 def derive_patient_hash(raw_patient_id: str, salt: str = SECRET_SALT) -> str:

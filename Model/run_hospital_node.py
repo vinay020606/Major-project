@@ -169,7 +169,7 @@ def fetch_global_state_dict(api_server: str) -> Optional["OrderedDict"]:
             payload = json.loads(resp.read().decode("utf-8"))
         raw = base64.b64decode(payload["weights_b64"].encode("ascii"))
         buf = io.BytesIO(raw)
-        sd = torch.load(buf, map_location="cpu", weights_only=False)
+        sd = torch.load(buf, map_location="cpu", weights_only=True)
         return OrderedDict(sd)
     except Exception as err:
         safe_print(f"[CLIENT] WARNING: failed to fetch global weights ({err}); using local init.")

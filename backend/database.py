@@ -1,4 +1,5 @@
 import hashlib
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -656,11 +657,12 @@ def seed_default_users_and_scans() -> None:
         # 3. Ensure the single Administrative Account exists
         admin_row = connection.execute("SELECT id FROM users WHERE role = 'admin'").fetchone()
         if not admin_row:
+            admin_password = os.environ.get("PULMOSCAN_ADMIN_PASSWORD", "AdminPass123!")
             create_user(
                 email="admin@pulmoscan.org",
-                password="AdminPass123!",
+                password=admin_password,
                 name="System Administrator",
                 role="admin",
                 hospital_node="Central Aggregation Hub",
             )
-            log_audit_event("system@pulmoscan.org", "admin", "SYSTEM_INITIALIZED", "system", "Default Admin account initialized with AdminPass123!.")
+            log_audit_event("system@pulmoscan.org", "admin", "SYSTEM_INITIALIZED", "system", "Default Admin account initialized (password sourced from PULMOSCAN_ADMIN_PASSWORD env var or built-in default).")

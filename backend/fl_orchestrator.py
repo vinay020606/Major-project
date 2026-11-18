@@ -105,7 +105,7 @@ def _state_dict_to_b64(state_dict: "OrderedDict[str, torch.Tensor]") -> str:
 def _b64_to_state_dict(b64_str: str) -> "OrderedDict[str, torch.Tensor]":
     raw = base64.b64decode(b64_str.encode("ascii"))
     buf = io.BytesIO(raw)
-    sd = torch.load(buf, map_location="cpu", weights_only=False)
+    sd = torch.load(buf, map_location="cpu", weights_only=True)
     return OrderedDict(sd)
 
 
@@ -456,7 +456,7 @@ class FederatedOrchestrator:
                     return {"status": "error",
                             "message": f"weight hash mismatch: client={weights_hash} server={verified_hash}"}
                 buf = io.BytesIO(raw)
-                client_state = OrderedDict(torch.load(buf, map_location="cpu", weights_only=False))
+                client_state = OrderedDict(torch.load(buf, map_location="cpu", weights_only=True))
             except Exception as err:
                 return {"status": "error", "message": f"failed to decode weights: {err}"}
 
