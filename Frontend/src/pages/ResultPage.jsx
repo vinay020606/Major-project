@@ -52,6 +52,7 @@ export default function ResultPage({ currentResult, onBackToUpload, onSaveToHist
     patient_hash = 'PT-1001',
     is_dicom,
     dicom_metadata,
+    care_plan,
   } = currentResult;
 
   const isPositive = prediction?.toLowerCase().includes('positive');
@@ -231,7 +232,7 @@ export default function ResultPage({ currentResult, onBackToUpload, onSaveToHist
       </div>
 
       {/* ── Stage Care Guidance (if positive) ── */}
-      {isPositive && <StageCarePanel stage={stage} />}
+      {isPositive && <StageCarePanel stage={stage} carePlan={care_plan} />}
 
       {/* ── Doctor Review Panel (Section 19) ── */}
       <div className="bg-white p-5 sm:p-6 rounded-2xl border border-[#E2E8F0] shadow-xs space-y-4">

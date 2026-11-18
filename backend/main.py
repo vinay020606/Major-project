@@ -173,6 +173,10 @@ class FLUpdateSubmitInput(BaseModel):
     num_samples: int
     size_mb: float = 11.2
     weights_hash: str | None = None
+    # Base64-encoded torch.save of the locally-trained state_dict. Optional for
+    # backwards-compat with telemetry-only clients, but required for the server
+    # to actually aggregate weights rather than metrics.
+    weights_b64: str | None = None
 
 
 class FLEventEmitInput(BaseModel):
@@ -304,6 +308,53 @@ def get_stage(stage_id: int) -> dict[str, Any]:
     if stage is None:
         raise HTTPException(status_code=404, detail="Invalid stage number")
     return stage
+
+
+# Standardised clinician disclaimer attached to every care-plan payload so the
+# UI never displays a plan without the regulatory note the project claims.
+CARE_PLAN_DISCLAIMER = (
+    "Decision-support only. Not a prescription. Treatment must be confirmed by "
+    "a licensed clinician against current WHO/national TB guidelines and the "
+    "patient's clinical context, comorbidities, pregnancy status, and DST results."
+)
+
+
+def _build_care_plan(stage_id: int) -> dict[str, Any] | None:
+    """Returns the full structured care pathway for a TB stage (1-4).
+    Stage 0 (TB Negative) returns None — no plan needed."""
+    if stage_id < 1:
+        return None
+    stage = stage_data.get(str(stage_id))
+    if stage is None:
+        return None
+    return {
+        "stage": stage_id,
+        "name": stage.get("name"),
+        "severity": stage.get("severity"),
+        "infectious": stage.get("infectious"),
+        "summary": stage.get("summary"),
+        "steps": {
+            "immediate_care": stage.get("immediate_care", []),
+            "medication": stage.get("medication", {}),
+            "isolation": stage.get("isolation"),
+            "nutrition": stage.get("nutrition", []),
+            "follow_up": stage.get("follow_up", {}),
+        },
+        "red_flags": stage.get("red_flags", []),
+        "patient_education": stage.get("patient_education", []),
+        "disclaimer": CARE_PLAN_DISCLAIMER,
+    }
+
+
+@app.get("/care-plan/{stage_id}")
+def get_care_plan(stage_id: int) -> dict[str, Any]:
+    """Structured clinical pathway for a given TB stage: immediate care,
+    medication regimen, isolation, nutrition, follow-up schedule, red flags,
+    and patient education bullets."""
+    plan = _build_care_plan(stage_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="No care plan for this stage")
+    return plan
 
 
 @app.post("/auth/login")
@@ -504,6 +555,7 @@ async def predict(
         "confidence": round(confidence, 4),
         "stage": stage or None,
         "stage_info": stage_data.get(str(stage), {}) if stage else None,
+        "care_plan": _build_care_plan(stage) if stage else None,
         "validator_probability": inference_result["validator_probability"],
         "model_class": inference_result["label"],
         "heatmap_base64": inference_result.get("heatmap_base64") if is_positive else None,
@@ -928,8 +980,9 @@ def emit_fl_event(payload: FLEventEmitInput):
 @app.post("/api/fl/round/submit-update")
 def submit_fl_update(payload: FLUpdateSubmitInput):
     """
-    Ingests encrypted local model parameter update vector and training metrics
-    from edge hospital nodes (Laptop B / C). Triggers FedAvg aggregation.
+    Ingests the local model state_dict (base64-pickled) plus training metrics
+    from edge hospital nodes. Triggers real FedAvg aggregation when enough
+    clients have submitted (min_clients quorum).
     """
     res = fl_orchestrator.submit_update(
         node_id=payload.node_id,
@@ -940,10 +993,22 @@ def submit_fl_update(payload: FLUpdateSubmitInput):
         num_samples=payload.num_samples,
         size_mb=payload.size_mb,
         weights_hash=payload.weights_hash,
+        weights_b64=payload.weights_b64,
     )
     if res.get("status") == "error":
         raise HTTPException(status_code=400, detail=res.get("message"))
     return res
+
+
+@app.get("/api/fl/model/current-weights")
+def get_fl_current_weights() -> dict[str, Any]:
+    """Returns the current global ResNet-18 state_dict as a base64 blob so that
+    edge nodes can download it at the start of a round and train from the true
+    aggregated model (instead of a locally-initialized one)."""
+    return {
+        "version": fl_orchestrator.global_version,
+        "weights_b64": fl_orchestrator.get_global_weights_b64(),
+    }
 
 
 @app.get("/api/fl/audit-logs")

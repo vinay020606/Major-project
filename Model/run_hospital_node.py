@@ -7,6 +7,7 @@ sends heartbeats to Central Server, and prints synchronized terminal logs.
 """
 
 import argparse
+import base64
 import datetime
 import hashlib
 import io
@@ -20,6 +21,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -156,6 +158,33 @@ def calculate_serialized_size_mb(parameters: List[np.ndarray]) -> float:
     bio = io.BytesIO()
     pickle.dump(parameters, bio)
     return round(len(bio.getvalue()) / (1024 * 1024), 2)
+
+
+def fetch_global_state_dict(api_server: str) -> Optional["OrderedDict"]:
+    """Downloads the current global state_dict from the central server."""
+    url = f"{api_server.rstrip('/')}/api/fl/model/current-weights"
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=15.0) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        raw = base64.b64decode(payload["weights_b64"].encode("ascii"))
+        buf = io.BytesIO(raw)
+        sd = torch.load(buf, map_location="cpu", weights_only=False)
+        return OrderedDict(sd)
+    except Exception as err:
+        safe_print(f"[CLIENT] WARNING: failed to fetch global weights ({err}); using local init.")
+        return None
+
+
+def state_dict_to_b64_and_hash(sd: "OrderedDict") -> Tuple[str, str, float]:
+    """Serializes a state_dict for transport. Returns (b64, sha256[:16], size_mb)."""
+    buf = io.BytesIO()
+    torch.save({k: v.detach().cpu() for k, v in sd.items()}, buf)
+    raw = buf.getvalue()
+    b64 = base64.b64encode(raw).decode("ascii")
+    sha = hashlib.sha256(raw).hexdigest()[:16]
+    size_mb = round(len(raw) / (1024 * 1024), 2)
+    return b64, sha, size_mb
 
 
 def load_hospital_dataset(path_input: Optional[str], default_dir: Path, tfms) -> Tuple[torch.utils.data.Dataset, str, int, int]:
@@ -349,16 +378,9 @@ def main():
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
     criterion = nn.CrossEntropyLoss()
 
-    # Attach Opacus DP-SGD if requested
+    # Opacus DP-SGD: actually attach the PrivacyEngine (previously imported but
+    # never wired — gradient clipping alone is NOT DP-SGD).
     privacy_engine = None
-    if args.dp:
-        try:
-            from opacus import PrivacyEngine
-            privacy_engine = PrivacyEngine()
-            print(f"[DP-SGD] Gradient clipping enabled (max_norm={args.max_grad_norm})")
-            print(f"[DP-SGD] Calibrated Gaussian noise scale (sigma={args.noise_multiplier})")
-        except Exception:
-            print(f"[DP-SGD] Privacy accounting initialized (gradient clipping & noise active)")
 
     data_holder = {
         "dataset": local_dataset,
@@ -441,9 +463,19 @@ def main():
 
                 print(f"\n" + "-" * 58)
                 print(f"{BOLD}[FL] Round #{current_round_num} started across cluster{RESET}")
-                print(f"[MODEL] Receiving Global Model {global_version} parameters from Central Server...")
-                time.sleep(0.8)
-                print(f"[MODEL] Global model {global_version} weights loaded into local ResNet-18 ✓")
+                print(f"[MODEL] Fetching Global Model {global_version} state_dict from Central Server...")
+                fetched_sd = fetch_global_state_dict(args.api_server)
+                if fetched_sd is not None:
+                    try:
+                        model.load_state_dict(fetched_sd, strict=False)
+                        print(f"[MODEL] Global model {global_version} weights loaded into local ResNet-18 ✓")
+                    except Exception as err:
+                        print(f"[MODEL] WARNING: load_state_dict failed ({err}); continuing with current local weights.")
+                else:
+                    print(f"[MODEL] Proceeding with current local weights (download failed).")
+
+                # Snapshot w_global for the FedProx proximal term BEFORE any local step.
+                w_global_snapshot = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
 
                 # Notify central server of local training start
                 post_json(
@@ -462,39 +494,60 @@ def main():
                 batch_limit = 4 if args.demo else min(20, max(5, active_size // args.batch_size))
                 batch_delay = 1.5 if args.demo else 0.4
 
+                # Per-round Opacus attachment. The engine wraps model/optimizer/loader
+                # in-place via make_private, so we rebind to the returned instances.
+                round_optimizer = optimizer
+                round_data_loader = torch.utils.data.DataLoader(active_dataset, batch_size=args.batch_size, shuffle=True)
+                round_privacy_engine = None
+                if args.dp:
+                    try:
+                        from opacus import PrivacyEngine
+                        round_privacy_engine = PrivacyEngine()
+                        model, round_optimizer, round_data_loader = round_privacy_engine.make_private(
+                            module=model,
+                            optimizer=round_optimizer,
+                            data_loader=round_data_loader,
+                            noise_multiplier=args.noise_multiplier,
+                            max_grad_norm=args.max_grad_norm,
+                        )
+                        print(f"[DP-SGD] Opacus PrivacyEngine attached (σ={args.noise_multiplier}, C={args.max_grad_norm})")
+                    except Exception as err:
+                        print(f"[DP-SGD] WARNING: Opacus unavailable ({err}); falling back to grad clipping only.")
+                        round_privacy_engine = None
+
                 model.train()
                 running_loss = 0.0
                 correct = 0
                 total = 0
 
-                # Real PyTorch training loop across mini-batches
-                data_loader = torch.utils.data.DataLoader(active_dataset, batch_size=args.batch_size, shuffle=True)
-                for b_idx, (inputs, targets) in enumerate(data_loader):
+                for b_idx, (inputs, targets) in enumerate(round_data_loader):
                     if b_idx >= batch_limit:
                         break
 
                     inputs = inputs.to(device)
                     targets = targets.to(device)
 
-                    optimizer.zero_grad()
+                    round_optimizer.zero_grad()
                     outputs = model(inputs)
                     loss = criterion(outputs, targets)
 
-                    # FedProx proximal regularization term
-                    proximal_loss = 0.0
-                    if args.mu > 0:
-                        for p in model.parameters():
-                            if p.requires_grad:
-                                proximal_loss += (args.mu / 2) * torch.norm(p) ** 2
-                        loss = loss + proximal_loss
+                    # Correct FedProx proximal term: (mu/2) * sum ||w - w_global||^2.
+                    # Previously was (mu/2) * ||w||^2 which is just weight decay.
+                    if args.mu > 0 and w_global_snapshot:
+                        proximal_loss = 0.0
+                        for n, p in model.named_parameters():
+                            if p.requires_grad and n in w_global_snapshot:
+                                proximal_loss = proximal_loss + torch.sum((p - w_global_snapshot[n].to(p.device)) ** 2)
+                        loss = loss + (args.mu / 2.0) * proximal_loss
 
                     loss.backward()
 
-                    # Gradient clipping for Differential Privacy
-                    if args.dp:
+                    # If Opacus is attached, clipping+noise happen inside optimizer.step().
+                    # Without Opacus, fall back to a plain grad clip so DP is still *partially* truthful.
+                    if round_privacy_engine is None and args.dp:
                         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.max_grad_norm)
 
-                    optimizer.step()
+                    round_optimizer.step()
 
                     running_loss += loss.item()
                     _, preds = torch.max(outputs, 1)
@@ -527,7 +580,16 @@ def main():
 
                 final_loss = round(running_loss / max(1, batch_limit), 4)
                 final_acc = round((correct / max(1, total)) * 100, 1)
-                calculated_epsilon = round(0.42 * current_round_num + np.random.uniform(0.01, 0.05), 2)
+                # Real epsilon from Opacus accountant; falls back to a clearly-labelled
+                # heuristic ONLY when Opacus is unavailable in the environment.
+                if round_privacy_engine is not None:
+                    try:
+                        calculated_epsilon = round(round_privacy_engine.get_epsilon(delta=args.target_delta), 2)
+                    except Exception as err:
+                        print(f"[DP-SGD] get_epsilon failed ({err}); reporting 0.0")
+                        calculated_epsilon = 0.0
+                else:
+                    calculated_epsilon = round(0.42 * current_round_num, 2)  # heuristic, no Opacus
 
                 print(f"\n[TRAINING] Local training completed successfully:")
                 print(f"  • Final Local Loss:     {final_loss}")
@@ -540,17 +602,19 @@ def main():
                 heartbeat_daemon.last_acc = final_acc
                 heartbeat_daemon.dp_epsilon = calculated_epsilon
 
-                # 6. Extract Trained Weights and Serialize Vector
-                print(f"\n[WEIGHTS] Extracting updated PyTorch model parameters...")
-                trained_ndarrays = [p.detach().cpu().numpy() for p in model.parameters() if p.requires_grad]
-                total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-                update_size_mb = calculate_serialized_size_mb(trained_ndarrays)
-
-                param_bytes = pickle.dumps(trained_ndarrays)
-                weight_hash = hashlib.sha256(param_bytes).hexdigest()[:16]
+                # 6. Extract Trained Weights and Serialize for Transport
+                # Opacus wraps modules as GradSampleModule — unwrap before snapshotting.
+                extracted_model = model
+                inner = getattr(extracted_model, "_module", None)
+                if inner is not None:
+                    extracted_model = inner
+                print(f"\n[WEIGHTS] Extracting updated PyTorch model state_dict...")
+                trained_state_dict = OrderedDict(extracted_model.state_dict())
+                total_params = sum(t.numel() for t in trained_state_dict.values())
+                weights_b64, weight_hash, update_size_mb = state_dict_to_b64_and_hash(trained_state_dict)
 
                 print(f"  • Model Architecture: ResNet-18 ({total_params:,} parameters)")
-                print(f"  • Serialized Weights: {update_size_mb} MB")
+                print(f"  • Serialized Weights: {update_size_mb} MB (full state_dict)")
                 print(f"  • Weight Checksum:    SHA256:{weight_hash}")
                 print(f"  • Privacy Guarantee:  Raw patient X-rays NEVER leave this machine ✓")
 
@@ -571,7 +635,8 @@ def main():
                 print(f"\n[UPLOAD] Transmitting parameter vector ({update_size_mb} MB) to Central Server...")
                 time.sleep(1.2)
 
-                # Upload model parameters / metrics payload to Central Server
+                # Upload full model state_dict + metrics to Central Server.
+                # Timeout bumped because the payload is MB-scale (~45 MB for ResNet-18).
                 upload_res = post_json(
                     f"{args.api_server}/api/fl/round/submit-update",
                     {
@@ -583,7 +648,9 @@ def main():
                         "num_samples": active_size,
                         "size_mb": update_size_mb,
                         "weights_hash": weight_hash,
+                        "weights_b64": weights_b64,
                     },
+                    timeout=60.0,
                 )
 
                 print(f"[UPLOAD] Central Server accepted weight vector ✓")

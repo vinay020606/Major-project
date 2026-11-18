@@ -1,0 +1,88 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: pulmoscan-backend
+    ports:
+      - "8000:8000"
+    environment:
+      FL_MIN_CLIENTS: "3"
+      ALLOWED_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
+    volumes:
+      - backend-data:/app/backend/edge_storage
+      - models:/app/Model/models
+      - checkpoints:/app/Model/checkpoints
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [pulmoscan]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Frontend/Dockerfile
+    container_name: pulmoscan-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE_URL: "http://localhost:8000"
+    depends_on:
+      - backend
+    networks: [pulmoscan]
+
+  hospital-a:
+    build:
+      context: .
+      dockerfile: Model/Dockerfile
+    container_name: pulmoscan-node-a
+    environment:
+      NODE_ID: node_A
+      API_SERVER: "http://backend:8000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+    networks: [pulmoscan]
+
+  hospital-b:
+    build:
+      context: .
+      dockerfile: Model/Dockerfile
+    container_name: pulmoscan-node-b
+    environment:
+      NODE_ID: node_B
+      API_SERVER: "http://backend:8000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+    networks: [pulmoscan]
+
+  hospital-c:
+    build:
+      context: .
+      dockerfile: Model/Dockerfile
+    container_name: pulmoscan-node-c
+    environment:
+      NODE_ID: node_C
+      API_SERVER: "http://backend:8000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+    networks: [pulmoscan]
+
+volumes:
+  backend-data:
+  models:
+  checkpoints:
+
+networks:
+  pulmoscan:
+    driver: bridge

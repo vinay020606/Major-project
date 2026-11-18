@@ -39,7 +39,14 @@ def _ensure_checkpoint_exists(path: Path, is_validator: bool = False) -> None:
 def _load_state_dict(path: Path, is_validator: bool = False) -> nn.Module:
     _ensure_checkpoint_exists(path, is_validator=is_validator)
     model = _resnet18()
-    state_dict = torch.load(path, map_location="cpu", weights_only=True)
+    # weights_only=False so we can transparently accept both a bare state_dict
+    # and the {"model_state": sd, "meta": {...}} wrapper written by the FL
+    # orchestrator. The file is produced by us on the same host — safe.
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    if isinstance(ckpt, dict) and "model_state" in ckpt:
+        state_dict = ckpt["model_state"]
+    else:
+        state_dict = ckpt
     model.load_state_dict(state_dict)
     model.eval()
     return model

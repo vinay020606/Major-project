@@ -1,45 +1,210 @@
 {
   "1": {
-    "name": "Stage 1 - Latent",
-    "medication": "Isoniazid (preventive therapy)",
-    "precautions": [
-      "Regular follow-up checkups",
-      "No isolation needed - not contagious"
+    "name": "Stage 1 — Latent TB Infection (LTBI)",
+    "severity": "Low",
+    "infectious": false,
+    "summary": "Mycobacterium tuberculosis present but contained by the immune system. Patient is asymptomatic and non-contagious.",
+    "immediate_care": [
+      "Confirm with IGRA (QuantiFERON) or TST before starting any therapy",
+      "Baseline LFTs, HIV screen, pregnancy test where applicable",
+      "Review contacts and index case",
+      "Document weight (dosing reference for next steps)"
     ],
-    "diet": "Balanced diet with adequate protein",
+    "medication": {
+      "regimen": "3HP preferred — Isoniazid 15 mg/kg + Rifapentine 15 mg/kg weekly × 12 weeks (DOT)",
+      "alternatives": [
+        "4R — Rifampicin 10 mg/kg daily × 4 months",
+        "6H or 9H — Isoniazid 5 mg/kg daily × 6-9 months + pyridoxine 25 mg daily"
+      ],
+      "watch_for": [
+        "Hepatotoxicity — check LFTs at baseline, 1 and 3 months",
+        "Peripheral neuropathy — co-prescribe pyridoxine with isoniazid",
+        "Rifamycin drug interactions (OCPs, warfarin, HIV ARVs)"
+      ]
+    },
+    "isolation": "None required — not transmissible.",
+    "nutrition": [
+      "Balanced diet, adequate protein (1.0 g/kg/day)",
+      "Vitamin D if deficient; pyridoxine 25 mg/day if on isoniazid"
+    ],
+    "follow_up": {
+      "visits": "Clinic review at weeks 2, 4, then monthly to end of regimen",
+      "labs": "LFTs at baseline, month 1, month 3 (sooner if symptomatic)",
+      "imaging": "No repeat CXR unless symptoms develop",
+      "endpoint": "Document completion; annual symptom screen for 2 years"
+    },
+    "red_flags": [
+      "New cough, fever, night sweats, weight loss",
+      "Jaundice, dark urine, RUQ pain (hepatitis)",
+      "Numbness or tingling (neuropathy)"
+    ],
+    "patient_education": [
+      "You are not contagious — no isolation needed",
+      "Do not skip doses; set a weekly reminder",
+      "Avoid alcohol while on isoniazid/rifampicin",
+      "Return immediately if yellow eyes/skin or new breathing symptoms"
+    ],
     "warning": "Consult doctor if symptoms like cough or fever develop"
   },
   "2": {
-    "name": "Stage 2 - Mild",
-    "medication": "Isoniazid + Rifampicin",
-    "precautions": [
-      "Wear mask indoors",
-      "Avoid crowded places",
-      "Complete full medication course"
+    "name": "Stage 2 — Mild Active Pulmonary TB",
+    "severity": "Moderate",
+    "infectious": true,
+    "summary": "Early active disease with limited radiographic involvement. Patient is potentially infectious until smear-negative.",
+    "immediate_care": [
+      "Collect 2-3 sputum specimens for AFB smear + Xpert MTB/RIF",
+      "Baseline CXR interpretation documented in chart",
+      "HIV test, diabetes screen, hepatitis panel, baseline LFTs + renal",
+      "Register the case under the national TB program",
+      "Start infection-control measures the same day"
     ],
-    "diet": "High protein, vitamin-rich diet",
+    "medication": {
+      "regimen": "HRZE — Isoniazid + Rifampicin + Pyrazinamide + Ethambutol daily for 2 months (intensive phase), then HR daily × 4 months (continuation).",
+      "dosing_reference": "H 5 mg/kg · R 10 mg/kg · Z 25 mg/kg · E 15 mg/kg (WHO adult bands)",
+      "adjuncts": [
+        "Pyridoxine 25 mg/day",
+        "Antiemetic PRN during first 2 weeks"
+      ],
+      "watch_for": [
+        "Hepatotoxicity — hold all drugs if ALT > 3× ULN with symptoms or 5× ULN asymptomatic",
+        "Visual changes — ethambutol-induced optic neuritis",
+        "Orange-red body fluids — rifampicin (expected, reassure patient)"
+      ]
+    },
+    "isolation": "Home isolation in a single well-ventilated room until 2 consecutive AFB-negative sputums or clear clinical+bacteriological response (usually 2-3 weeks).",
+    "nutrition": [
+      "1.2-1.5 g protein/kg/day",
+      "Micronutrients: zinc, vitamin A, vitamin D",
+      "High-calorie supplementation if BMI < 18.5"
+    ],
+    "follow_up": {
+      "visits": "Weekly for first month (DOT), then monthly",
+      "labs": "LFTs at 2 weeks, 1 month, then if symptomatic",
+      "sputum": "Repeat AFB smear at end of month 2 (end of intensive phase) and month 5; convert to culture if smear still positive",
+      "imaging": "CXR at month 2 and end of treatment",
+      "endpoint": "Cured = negative smear at month 5 and end of treatment"
+    },
+    "red_flags": [
+      "Hemoptysis (coughing blood)",
+      "Persistent fever > 2 weeks despite therapy",
+      "Visual blurring or color desaturation (ethambutol)",
+      "Jaundice or severe nausea/vomiting"
+    ],
+    "patient_education": [
+      "Cover your mouth; open windows; sleep alone during infectious period",
+      "Take every dose — missed doses breed resistance",
+      "Expect orange urine, tears, sweat — it is the medicine, not blood",
+      "No alcohol until end of continuation phase"
+    ],
     "warning": "See doctor immediately if coughing blood"
   },
   "3": {
-    "name": "Stage 3 - Moderate",
-    "medication": "4-drug regimen (HRZE: Isoniazid, Rifampicin, Pyrazinamide, Ethambutol)",
-    "precautions": [
-      "Isolate from family members",
-      "Daily symptom monitoring",
-      "Strict medication schedule"
+    "name": "Stage 3 — Moderate Active TB",
+    "severity": "High",
+    "infectious": true,
+    "summary": "Extensive pulmonary involvement, often cavitary. High bacillary burden and transmissibility.",
+    "immediate_care": [
+      "Admit if any of: SpO₂ < 92%, severe wasting, hemoptysis, suspected drug resistance",
+      "Fit-tested N95 for staff; patient in an airborne-isolation room (AIIR) if hospitalized",
+      "Xpert MTB/RIF to rule out rifampicin resistance before starting therapy",
+      "Full HIV workup; CD4 if positive, start ART within 2-8 weeks of TB therapy",
+      "Nutritional and functional assessment"
     ],
-    "diet": "High calorie, high protein diet",
+    "medication": {
+      "regimen": "HRZE daily × 2 months intensive, then HR daily × 4 months continuation. Consider extending continuation to 7 months if cavitary disease and positive culture at month 2.",
+      "adjuncts": [
+        "Pyridoxine 50 mg/day",
+        "Vitamin D + calcium if steroid use",
+        "Corticosteroids only for specific indications (e.g., TB meningitis, pericarditis) — not routine"
+      ],
+      "watch_for": [
+        "Drug-induced hepatitis — low threshold to pause and recheck LFTs",
+        "Immune reconstitution inflammatory syndrome (IRIS) in HIV co-infection",
+        "Paradoxical worsening — do NOT change regimen without specialist review"
+      ],
+      "resistance_check": "If Xpert shows rifampicin resistance, DO NOT start first-line therapy — refer to DR-TB program for MDR workup."
+    },
+    "isolation": "Inpatient AIIR or strict home isolation × minimum 2-3 weeks of effective therapy AND 3 consecutive negative AFB smears. Household contacts screened within 7 days.",
+    "nutrition": [
+      "1.5-2.0 g protein/kg/day; 35-40 kcal/kg/day",
+      "Supervised supplementation; enteral feeds if oral intake inadequate",
+      "Correct anemia, hypoalbuminemia before major interventions"
+    ],
+    "follow_up": {
+      "visits": "DOT daily or 5×/week in intensive phase; weekly in continuation",
+      "labs": "LFTs weekly × 4 weeks, then monthly; CBC monthly; creatinine monthly",
+      "sputum": "AFB smear + culture at month 2, 3, 5, 6",
+      "imaging": "CXR at months 2, 5, end of treatment",
+      "contact_tracing": "All close contacts evaluated with symptom screen + CXR + IGRA within 7 days"
+    },
+    "red_flags": [
+      "Massive hemoptysis (> 200 mL/24 h) — EMERGENCY",
+      "New neurological symptoms (meningitis, tuberculoma)",
+      "Severe hepatotoxicity",
+      "Worsening on therapy after 8 weeks — assess for MDR"
+    ],
+    "patient_education": [
+      "Stay in your isolation room except for medical visits",
+      "Wear a surgical mask whenever you leave the room",
+      "DOT means a health worker watches each dose — this is normal and protective",
+      "Keep a symptom diary — bring it to every visit"
+    ],
     "warning": "Seek emergency care if breathlessness occurs"
   },
   "4": {
-    "name": "Stage 4 - Severe",
-    "medication": "Extended HRZE regimen + specialist supervision",
-    "precautions": [
-      "Hospitalization strongly advised",
-      "Complete isolation",
-      "Continuous monitoring"
+    "name": "Stage 4 — Severe / Advanced TB",
+    "severity": "Critical",
+    "infectious": true,
+    "summary": "Extensive bilateral disease, miliary pattern, or complications (respiratory failure, meningitis, disseminated). Potentially life-threatening.",
+    "immediate_care": [
+      "Admit to hospital, airborne isolation room",
+      "ABG; oxygen to target SpO₂ ≥ 90%; escalate to NIV/invasive ventilation if indicated",
+      "IV access, fluids, correct electrolytes",
+      "Empirical HRZE within 24 h after specimens collected — do not wait for culture if clinically unstable",
+      "Pulmonology / infectious disease consult same day",
+      "Screen and manage complications: cor pulmonale, meningitis, Addisonian crisis (adrenal TB)"
     ],
-    "diet": "Supervised nutrition plan, possibly IV nutrition",
+    "medication": {
+      "regimen": "HRZE intensive × 2 months, continuation extended to 7-10 months total (longer in CNS, bone/joint, disseminated). Weight-band dosing adjusted for critical illness and renal/hepatic function.",
+      "adjuncts": [
+        "Corticosteroids (prednisolone 1 mg/kg tapered over 6-8 weeks) for TB meningitis, pericarditis, severe miliary with respiratory failure",
+        "Pyridoxine 50-100 mg/day",
+        "Thromboprophylaxis per inpatient protocol",
+        "ART in HIV: start within 2 weeks of TB therapy if CD4 < 50; else by week 8"
+      ],
+      "watch_for": [
+        "Hepatic failure — paradoxically higher risk from TB disease itself than drugs; ID input before stopping therapy",
+        "Paradoxical reactions and IRIS",
+        "Drug accumulation in renal failure (adjust E, Z)"
+      ],
+      "resistance_check": "Urgent DST (Xpert MTB/XDR) — assume high resistance risk until proven otherwise."
+    },
+    "isolation": "Strict AIIR for entire inpatient stay AND until documented smear/culture conversion. All visitors in N95. Discharge only when non-infectious AND social support in place.",
+    "nutrition": [
+      "Enteral nutrition day 1 if oral intake impaired; target 1.5-2.0 g protein/kg/day",
+      "Refeeding syndrome risk — phosphate/potassium/magnesium monitoring in first week",
+      "Dietician review within 24 hours"
+    ],
+    "follow_up": {
+      "visits": "Inpatient daily reviews; post-discharge DOT 5×/week; monthly specialist clinic × 12 months",
+      "labs": "Daily LFTs + U&Es in first week, then per protocol",
+      "sputum": "AFB smear + culture weekly until 2 consecutive negatives, then monthly",
+      "imaging": "CXR weekly until stable, then at months 2, 5, end of treatment; CT if complications",
+      "rehab": "Pulmonary rehabilitation referral post-discharge; mental health screen (TB is a known depression risk)"
+    },
+    "red_flags": [
+      "Respiratory failure requiring ventilation",
+      "Acute confusion / meningism — lumbar puncture for TB meningitis",
+      "Hemodynamic instability — rule out pericardial effusion/tamponade",
+      "Severe hyponatremia — SIADH or adrenal TB",
+      "Pregnancy — streptomycin contraindicated; coordinate with obstetrics"
+    ],
+    "patient_education": [
+      "Your family will be screened — this is for their safety, not stigma",
+      "Treatment is long (often 9-12 months); every dose counts",
+      "Expect fatigue and mood changes — ask for help",
+      "Return to ER for: breathlessness at rest, confusion, chest pain, massive hemoptysis"
+    ],
     "warning": "Immediate hospital admission required"
   }
 }

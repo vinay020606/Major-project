@@ -1,0 +1,13 @@
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/venv
+Frontend/dist
+Model/checkpoints/*.pth
+Model/models/*.pth
+backend/edge_storage
+backend/feedback.db
+*.md
+!README.md
