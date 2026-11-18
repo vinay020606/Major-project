@@ -13,7 +13,11 @@ import {
 } from 'lucide-react';
 import { getStageInformation } from '../utils/stageData';
 import { useAuth } from '../context/AuthContext';
-import { fetchScans } from '../services/api';
+import {
+  fetchScans,
+  submitSymptomAssessment,
+  fetchSymptomAssessments,
+} from '../services/api';
 
 export default function PatientDashboard({ onNavigate }) {
   const { user } = useAuth();
@@ -31,6 +35,69 @@ export default function PatientDashboard({ onNavigate }) {
   const toggleMed = (time) => {
     setMedsChecked((prev) => ({ ...prev, [time]: !prev[time] }));
   };
+
+  // ── TB Symptom Self-Assessment state ──
+  const defaultSymptomForm = {
+    cough_weeks: 0,
+    coughing_blood: false,
+    fever: false,
+    night_sweats: false,
+    weight_loss: false,
+    chest_pain: false,
+    fatigue: false,
+    breathlessness: false,
+    notes: '',
+  };
+  const [symptomForm, setSymptomForm] = useState(defaultSymptomForm);
+  const [symptomHistory, setSymptomHistory] = useState([]);
+  const [symptomSubmitting, setSymptomSubmitting] = useState(false);
+  const [symptomError, setSymptomError] = useState(null);
+  const [symptomLastResult, setSymptomLastResult] = useState(null);
+
+  const toggleSymptom = (key) => {
+    setSymptomForm((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  useEffect(() => {
+    const loadHistory = async () => {
+      if (!user?.email) return;
+      const res = await fetchSymptomAssessments(user.email, 10);
+      if (res.success && res.data?.assessments) {
+        setSymptomHistory(res.data.assessments);
+      }
+    };
+    loadHistory();
+  }, [user?.email]);
+
+  const handleSymptomSubmit = async () => {
+    if (!user?.email) {
+      setSymptomError('No patient session. Please sign in again.');
+      return;
+    }
+    setSymptomSubmitting(true);
+    setSymptomError(null);
+    const res = await submitSymptomAssessment({
+      patient_email: user.email,
+      patient_hash: user.patient_hash || null,
+      ...symptomForm,
+      cough_weeks: Number(symptomForm.cough_weeks) || 0,
+    });
+    setSymptomSubmitting(false);
+    if (res.success && res.data?.assessment) {
+      setSymptomLastResult(res.data.assessment);
+      setSymptomHistory((prev) => [res.data.assessment, ...prev].slice(0, 10));
+      setSymptomForm(defaultSymptomForm);
+    } else {
+      setSymptomError(res.error || 'Could not submit symptom assessment.');
+    }
+  };
+
+  const symptomBandColor = (band) =>
+    band === 'High'
+      ? 'bg-[#FEE2E2] text-[#B91C1C] border-[#FCA5A5]'
+      : band === 'Moderate'
+      ? 'bg-[#FEF3C7] text-[#92400E] border-[#FDE68A]'
+      : 'bg-[#DCFCE7] text-[#15803D] border-[#BBF7D0]';
 
   useEffect(() => {
     const loadPatientScans = async () => {
@@ -283,6 +350,125 @@ export default function PatientDashboard({ onNavigate }) {
           </div>
         </div>
       )}
+
+      {/* ── TB Symptom Self-Assessment ── */}
+      <div className="bg-white p-5 sm:p-6 rounded-2xl border border-[#E2E8F0] shadow-xs space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+          <div>
+            <h3 className="font-bold text-base text-[#0F172A] flex items-center gap-2">
+              <HeartPulse className="w-4 h-4 text-[#2563EB]" />
+              TB Symptom Self-Assessment
+            </h3>
+            <p className="text-xs text-[#64748B]">
+              Report your current symptoms. The system computes a WHO-aligned screening risk band and logs it for your care team.
+            </p>
+          </div>
+          {symptomLastResult && (
+            <span
+              className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${symptomBandColor(
+                symptomLastResult.risk_band
+              )}`}
+            >
+              Last: {symptomLastResult.risk_band} ({symptomLastResult.risk_score} pts)
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+          <label className="flex items-center justify-between p-3 rounded-xl border border-[#E2E8F0] bg-slate-50">
+            <span className="text-[#0F172A] font-medium">Cough duration (weeks)</span>
+            <input
+              type="number"
+              min={0}
+              max={104}
+              value={symptomForm.cough_weeks}
+              onChange={(e) =>
+                setSymptomForm((p) => ({ ...p, cough_weeks: e.target.value }))
+              }
+              className="w-20 text-right bg-white border border-[#E2E8F0] rounded-md px-2 py-1 text-[#0F172A]"
+            />
+          </label>
+
+          {[
+            { k: 'coughing_blood',   label: 'Coughing up blood (hemoptysis)' },
+            { k: 'fever',            label: 'Persistent fever' },
+            { k: 'night_sweats',     label: 'Night sweats' },
+            { k: 'weight_loss',      label: 'Unintentional weight loss' },
+            { k: 'chest_pain',       label: 'Chest pain' },
+            { k: 'fatigue',          label: 'Fatigue / weakness' },
+            { k: 'breathlessness',   label: 'Breathlessness' },
+          ].map((s) => (
+            <button
+              key={s.k}
+              type="button"
+              onClick={() => toggleSymptom(s.k)}
+              className={`p-3 rounded-xl border text-left transition-all ${
+                symptomForm[s.k]
+                  ? 'bg-[#EFF6FF] border-[#BFDBFE] text-[#1D4ED8]'
+                  : 'bg-white border-[#E2E8F0] text-[#64748B] hover:bg-slate-50'
+              }`}
+            >
+              <div className="font-semibold flex items-center justify-between">
+                <span>{s.label}</span>
+                {symptomForm[s.k] && <CheckCircle2 className="w-3.5 h-3.5 text-[#2563EB]" />}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <textarea
+          rows={2}
+          placeholder="Additional notes for your clinician (optional)"
+          value={symptomForm.notes}
+          onChange={(e) => setSymptomForm((p) => ({ ...p, notes: e.target.value }))}
+          className="w-full text-xs bg-white border border-[#E2E8F0] rounded-xl px-3 py-2 text-[#0F172A] placeholder-[#94A3B8]"
+        />
+
+        {symptomError && (
+          <div className="text-xs text-[#B91C1C] bg-[#FEE2E2] border border-[#FCA5A5] rounded-lg px-3 py-2">
+            {symptomError}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[11px] text-[#64748B]">
+            Screening heuristic only — not a diagnosis. Always confirm with your clinician.
+          </p>
+          <button
+            type="button"
+            disabled={symptomSubmitting}
+            onClick={handleSymptomSubmit}
+            className="text-xs font-semibold px-4 py-2 rounded-xl bg-[#2563EB] text-white hover:bg-[#1D4ED8] disabled:opacity-60"
+          >
+            {symptomSubmitting ? 'Saving...' : 'Submit assessment'}
+          </button>
+        </div>
+
+        {symptomHistory.length > 0 && (
+          <div className="pt-3 border-t border-[#E2E8F0] space-y-2">
+            <div className="text-xs font-semibold text-[#0F172A]">Recent assessments</div>
+            <div className="space-y-1.5">
+              {symptomHistory.slice(0, 5).map((a) => (
+                <div
+                  key={a.id}
+                  className="flex items-center justify-between text-xs bg-slate-50 border border-[#E2E8F0] rounded-lg px-3 py-2"
+                >
+                  <span className="text-[#64748B] font-mono">
+                    {new Date(a.created_at).toLocaleString()}
+                  </span>
+                  <span
+                    className={`font-semibold px-2 py-0.5 rounded-full border ${symptomBandColor(
+                      a.risk_band
+                    )}`}
+                  >
+                    {a.risk_band} · {a.risk_score} pts
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
 
     </div>
   );

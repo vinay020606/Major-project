@@ -62,6 +62,23 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (prediction_id) REFERENCES predictions(prediction_id)
             );
+            CREATE TABLE IF NOT EXISTS symptom_assessments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                patient_email TEXT NOT NULL,
+                patient_hash TEXT,
+                cough_weeks INTEGER DEFAULT 0,
+                coughing_blood INTEGER DEFAULT 0,
+                fever INTEGER DEFAULT 0,
+                night_sweats INTEGER DEFAULT 0,
+                weight_loss INTEGER DEFAULT 0,
+                chest_pain INTEGER DEFAULT 0,
+                fatigue INTEGER DEFAULT 0,
+                breathlessness INTEGER DEFAULT 0,
+                notes TEXT,
+                risk_score INTEGER DEFAULT 0,
+                risk_band TEXT,
+                created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS active_learning_queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 prediction_id TEXT UNIQUE NOT NULL,
@@ -118,6 +135,8 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
             CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
             CREATE INDEX IF NOT EXISTS idx_al_pending ON active_learning_queue(pending_active_learning);
+            CREATE INDEX IF NOT EXISTS idx_symptoms_patient_email ON symptom_assessments(patient_email);
+            CREATE INDEX IF NOT EXISTS idx_symptoms_created_at ON symptom_assessments(created_at);
             """
         )
 
@@ -641,6 +660,114 @@ def get_scans_by_role(role: str, patient_hash: str | None = None, limit: int = 1
         })
 
     return results
+
+
+SYMPTOM_FLAGS = (
+    "coughing_blood",
+    "fever",
+    "night_sweats",
+    "weight_loss",
+    "chest_pain",
+    "fatigue",
+    "breathlessness",
+)
+
+
+def _score_symptoms(assessment: dict[str, Any]) -> tuple[int, str]:
+    """Simple TB-screening heuristic (WHO-aligned cardinal symptoms).
+
+    Points: cough >= 3 weeks → 3, coughing blood → 3, each other flag → 1.
+    Bands: 0-1 Low, 2-4 Moderate, >=5 High.
+    """
+    score = 0
+    if int(assessment.get("cough_weeks") or 0) >= 3:
+        score += 3
+    if int(assessment.get("coughing_blood") or 0):
+        score += 3
+    for flag in ("fever", "night_sweats", "weight_loss",
+                 "chest_pain", "fatigue", "breathlessness"):
+        if int(assessment.get(flag) or 0):
+            score += 1
+    if score <= 1:
+        band = "Low"
+    elif score <= 4:
+        band = "Moderate"
+    else:
+        band = "High"
+    return score, band
+
+
+def save_symptom_assessment(
+    patient_email: str,
+    patient_hash: str | None,
+    cough_weeks: int,
+    coughing_blood: bool,
+    fever: bool,
+    night_sweats: bool,
+    weight_loss: bool,
+    chest_pain: bool,
+    fatigue: bool,
+    breathlessness: bool,
+    notes: str | None,
+) -> dict[str, Any]:
+    payload = {
+        "cough_weeks": int(cough_weeks or 0),
+        "coughing_blood": int(bool(coughing_blood)),
+        "fever": int(bool(fever)),
+        "night_sweats": int(bool(night_sweats)),
+        "weight_loss": int(bool(weight_loss)),
+        "chest_pain": int(bool(chest_pain)),
+        "fatigue": int(bool(fatigue)),
+        "breathlessness": int(bool(breathlessness)),
+    }
+    risk_score, risk_band = _score_symptoms(payload)
+    created_at = datetime.now(timezone.utc).isoformat()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO symptom_assessments (
+                patient_email, patient_hash,
+                cough_weeks, coughing_blood, fever, night_sweats,
+                weight_loss, chest_pain, fatigue, breathlessness,
+                notes, risk_score, risk_band, created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                patient_email, patient_hash,
+                payload["cough_weeks"], payload["coughing_blood"],
+                payload["fever"], payload["night_sweats"],
+                payload["weight_loss"], payload["chest_pain"],
+                payload["fatigue"], payload["breathlessness"],
+                notes, risk_score, risk_band, created_at,
+            ),
+        )
+        new_id = cursor.lastrowid
+    return {
+        "id": new_id,
+        "patient_email": patient_email,
+        "risk_score": risk_score,
+        "risk_band": risk_band,
+        "created_at": created_at,
+        **payload,
+        "notes": notes,
+    }
+
+
+def get_symptom_assessments(patient_email: str, limit: int = 30) -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, patient_email, patient_hash, cough_weeks, coughing_blood,
+                   fever, night_sweats, weight_loss, chest_pain, fatigue,
+                   breathlessness, notes, risk_score, risk_band, created_at
+            FROM symptom_assessments
+            WHERE patient_email = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (patient_email, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def seed_default_users_and_scans() -> None:

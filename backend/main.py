@@ -39,6 +39,8 @@ try:
         log_audit_event,
         save_feedback,
         save_prediction,
+        save_symptom_assessment,
+        get_symptom_assessments,
     )
     from .dicom_sanitizer import (
         derive_patient_hash,
@@ -71,6 +73,8 @@ except ImportError:
         log_audit_event,
         save_feedback,
         save_prediction,
+        save_symptom_assessment,
+        get_symptom_assessments,
     )
     from dicom_sanitizer import (
         derive_patient_hash,
@@ -143,6 +147,29 @@ class RegisterInput(BaseModel):
 class LogoutInput(BaseModel):
     email: str | None = None
     role: str | None = None
+
+
+class SymptomAssessmentInput(BaseModel):
+    patient_email: str
+    patient_hash: str | None = None
+    cough_weeks: int = 0
+    coughing_blood: bool = False
+    fever: bool = False
+    night_sweats: bool = False
+    weight_loss: bool = False
+    chest_pain: bool = False
+    fatigue: bool = False
+    breathlessness: bool = False
+    notes: str | None = None
+
+    @field_validator("cough_weeks")
+    @classmethod
+    def _validate_cough_weeks(cls, v: int) -> int:
+        if v is None:
+            return 0
+        if v < 0 or v > 104:
+            raise ValueError("cough_weeks must be between 0 and 104")
+        return v
 
 
 from fl_orchestrator import fl_orchestrator
@@ -428,6 +455,49 @@ def get_admin_info() -> dict[str, Any]:
     return {
         "admin_email": "admin@pulmoscan.org",
         "description": "Default System Administrator account. All clinicians and patients register independently.",
+    }
+
+
+@app.post("/patient/symptoms")
+def submit_symptom_assessment(payload: SymptomAssessmentInput) -> dict[str, Any]:
+    """Record a patient-reported TB-symptom assessment and return the computed risk band."""
+    user = get_user_by_email(payload.patient_email)
+    if not user:
+        raise HTTPException(status_code=404, detail="Patient account not found.")
+    record = save_symptom_assessment(
+        patient_email=payload.patient_email,
+        patient_hash=payload.patient_hash or user.get("patient_hash"),
+        cough_weeks=payload.cough_weeks,
+        coughing_blood=payload.coughing_blood,
+        fever=payload.fever,
+        night_sweats=payload.night_sweats,
+        weight_loss=payload.weight_loss,
+        chest_pain=payload.chest_pain,
+        fatigue=payload.fatigue,
+        breathlessness=payload.breathlessness,
+        notes=payload.notes,
+    )
+    log_audit_event(
+        user_email=payload.patient_email,
+        user_role=user.get("role") or "patient",
+        action="SYMPTOM_ASSESSMENT_SUBMITTED",
+        resource_id=str(record["id"]),
+        details=f"risk_band={record['risk_band']} score={record['risk_score']}",
+    )
+    return {"status": "success", "assessment": record}
+
+
+@app.get("/patient/symptoms")
+def list_symptom_assessments(email: str, limit: int = 30) -> dict[str, Any]:
+    """Return the symptom-assessment history for a patient (newest first)."""
+    if limit <= 0 or limit > 200:
+        limit = 30
+    user = get_user_by_email(email)
+    if not user:
+        raise HTTPException(status_code=404, detail="Patient account not found.")
+    return {
+        "status": "success",
+        "assessments": get_symptom_assessments(email, limit=limit),
     }
 
 

@@ -6,25 +6,81 @@ PulmoScan is a clinical AI decision-support system for **tuberculosis (TB) detec
 
 ---
 
-## 0. Project Objective → Implementation Trace
+## 0. Project Objectives → Implementation Trace
 
-> **Stated objective:** develop an AI-based system for early tuberculosis detection from chest X-ray images that **(a)** provides accurate disease predictions, **(b)** highlights affected regions for better interpretation, and **(c)** enables collaborative learning across multiple healthcare centers.
+> **Stated objectives:**
+> 1. **AI-Based TB Detection** — CNN system to detect TB from CXRs with **Grad-CAM** explainability.
+> 2. **Privacy-Preserving Federated Learning** — multiple hospital nodes collaboratively train the model without sharing raw patient data.
+> 3. **Integrated Doctor and Patient Platform** — X-ray analysis, patient history, symptom assessment, monitoring, care information, and feedback.
+> 4. **Intelligent Healthcare Support** — assists doctors in TB screening and lets patients monitor symptoms, diagnosis, treatment adherence, and progress.
 
-Every requirement is implemented. Direct code pointers:
+Every objective is implemented. Direct code pointers:
 
-| Requirement | How it's realized | Where in code |
-|---|---|---|
-| **Early TB detection from CXR** | ResNet-18 (torchvision) with a 2-class head (`TB_Positive`, `TB_Negative`), loaded lazily from the current FL checkpoint. Input accepts DICOM / JPEG / PNG / WebP. An upstream **OOD gatekeeper ResNet-18** rejects non-chest images (abdominal CT, derma, blank/corrupted) *before* the TB model runs, so predictions are only produced on valid CXRs. | `backend/model_inference.py` — `ChestXRayInference`, `_resnet18()`, `predict()` · validator at `Model/models/chest_xray_validator.pth` |
-| **Accurate disease predictions** | Softmax confidence returned per prediction; confidence buckets (0.60 / 0.70 / 0.85 / 0.95) map to TB severity stages 1–4, which in turn drive a WHO-guideline-seeded `care_plan` object (HRZE / 3HP regimens, isolation, follow-up). Clinician sign-off is persisted and corrections feed the active-learning queue so accuracy improves over rounds. | `backend/model_inference.py::predict` (softmax + stage bucketing) · `backend/stages.json` + `_build_care_plan` · `backend/database.py::save_feedback` + `enqueue_active_learning` |
-| **Highlights affected regions** | **Grad-CAM++** over `layer4` of the TB ResNet-18. The extractor computes a gradient-weighted class activation map, overlays it on the input CXR with a JET colormap, and derives **bounding boxes** around high-activation lesion regions. Both `heatmap_base64` (ready-to-render PNG) and `bounding_boxes` are returned in the `/predict` response and rendered by the frontend result page. | `backend/model_inference.py::GradCAMPlusPlusExtractor` (line 69) · overlay at line 152 · bbox derivation at line 158 · `Frontend/src` result page consumer |
-| **Collaborative learning across multiple healthcare centers** | Three "hospital" FL clients (`node_A/B/C`) each hold a private CXR shard (`Model/data/hospital_*`), train locally under **Opacus DP-SGD + FedProx**, and upload only their updated ResNet-18 `state_dict` (SHA-256 integrity-checked) to a central orchestrator. The orchestrator aggregates with **sample-weighted FedAvg** once ≥ `FL_MIN_CLIENTS` nodes have submitted, evaluates the new global model on a held-out central test set, and writes a versioned checkpoint that the inference API picks up on the next request. **No patient images, labels, or identifiers ever leave a hospital node.** | `backend/fl_orchestrator.py` — `_fedavg`, `_execute_central_aggregation`, `submit_update` · `Model/run_hospital_node.py` — download global → FedProx+DP training loop → upload weights · REST endpoints `/api/fl/*` in `backend/main.py` |
+### Objective 1 — AI-Based TB Detection + Grad-CAM
 
-Additional capabilities that reinforce the objective but weren't explicitly asked for:
+| Feature | Where in code |
+|---|---|
+| ResNet-18 TB classifier (2-class head: TB_Positive / TB_Negative) | `backend/model_inference.py::_resnet18`, `ChestXRayInference.predict` |
+| Upstream OOD gatekeeper (rejects non-chest / blank / corrupted inputs) | `ChestXRayInference` validator path, threshold `VALIDATOR_THRESHOLD=0.35` |
+| Softmax confidence → severity stage (1–4) | `predict()` bucketing against 0.60 / 0.70 / 0.85 / 0.95 |
+| **Grad-CAM++** heatmap over `layer4` + lesion **bounding boxes** returned in `/predict` | `model_inference.py::GradCAMPlusPlusExtractor` (line 69), overlay line 152, bbox derivation line 158 |
+| Frontend heatmap viewer | `Frontend/src/components/HeatmapViewer.jsx`, consumed in `pages/ResultPage.jsx` |
+
+### Objective 2 — Privacy-Preserving Federated Learning
+
+| Feature | Where in code |
+|---|---|
+| Central FL orchestrator (round lifecycle, state machine, event bus) | `backend/fl_orchestrator.py` |
+| Hospital-node client (download global → train locally → upload weights) | `Model/run_hospital_node.py` |
+| **Sample-weighted FedAvg** aggregation (dtype-preserving) | `fl_orchestrator.py::_fedavg`, `_execute_central_aggregation` |
+| **Opacus DP-SGD** per-round, real `ε` reported via `get_epsilon(δ=1e-5)` | `run_hospital_node.py` PrivacyEngine attachment |
+| **FedProx** proximal term `(μ/2)·Σ‖w − w_global‖²` for non-IID stability | `run_hospital_node.py` loss computation |
+| SHA-256 integrity check on every weight upload | `fl_orchestrator.py::submit_update` |
+| `torch.load(..., weights_only=True)` everywhere weights are deserialized | FL path, both server and client sides |
+| Admin FL controls (start/cancel round, live status, nodes, events) | `/api/fl/*` endpoints in `backend/main.py`, frontend `pages/FLMonitorPage.jsx`, `pages/FederatedMonitorPage.jsx`, `pages/AdminDashboard.jsx` |
+
+### Objective 3 — Integrated Doctor and Patient Platform
+
+| Feature | Where in code |
+|---|---|
+| **X-ray analysis upload** (DICOM/JPEG/PNG/WebP ≤ 20 MB) | `pages/UploadPage.jsx` + `components/UploadDropzone.jsx` → `POST /predict` |
+| **Doctor result review** with Grad-CAM, bboxes, care plan | `pages/ResultPage.jsx` + `components/StageCarePanel.jsx` |
+| **Patient dashboard** (latest scan, doctor sign-off status, attending clinician) | `pages/PatientDashboard.jsx` |
+| **Patient history** (role-isolated list of past scans) | `pages/HistoryPage.jsx` + `components/HistoryTable.jsx` → `GET /scans` |
+| **Doctor feedback** (confirm/override AI, free-text notes → active-learning queue) | `ResultPage.jsx::submitFeedback` → `POST /feedback` → `enqueue_active_learning` |
+| **Structured care information** (WHO-aligned regimens, isolation, follow-up, red flags) | `backend/stages.json` + `_build_care_plan` in `backend/main.py` → `components/StageCarePanel.jsx` |
+| **Patient symptom self-assessment** (cardinal TB symptoms → risk band Low/Moderate/High) *(new)* | Backend: `database.py::save_symptom_assessment`, `get_symptom_assessments`, `/patient/symptoms` endpoints in `main.py`. Frontend: symptom panel in `pages/PatientDashboard.jsx` |
+| **Medication adherence tracker** (per-day regimen check-ins) | `PatientDashboard.jsx` adherence tiles (UI-local; persistence is a known deferred item) |
+| **Admin / audit platform** (user management, HIPAA audit log, FL cluster telemetry) | `pages/AdminDashboard.jsx` + `/admin/*`, `/audit/recent` endpoints |
+
+### Objective 4 — Intelligent Healthcare Support
+
+| Feature | Where in code |
+|---|---|
+| **TB screening for doctors** — inference pipeline + Grad-CAM + severity stage + care plan surfaced in one review page | `pages/ResultPage.jsx` + `/predict` response |
+| **Symptom monitoring for patients** — TB cardinal-symptom survey with WHO-aligned screening heuristic and persisted history | `/patient/symptoms` endpoints + `PatientDashboard.jsx` symptom panel |
+| **Diagnosis surfacing** — confidence, stage, heatmap, doctor-reviewed label | `ResultPage.jsx` + `PatientDashboard.jsx` Clinical Screening Summary card |
+| **Treatment adherence** — medication tiles tied to doctor-confirmed TB-positive diagnoses | `PatientDashboard.jsx` adherence section (conditional on `isPositive && doctorConfirmed`) |
+| **Health progress** — chronological scan list, per-record review notes, chronological symptom-assessment history with risk-band trend | `HistoryPage.jsx` + new "Recent assessments" list in symptom panel |
+| **Decision-support disclaimer** attached to every care plan (not a prescription) | `backend/main.py::_build_care_plan` disclaimer field |
+
+### Symptom-assessment scoring (reference)
+
+The screening heuristic in `backend/database.py::_score_symptoms` follows the WHO cardinal-symptom approach:
+
+| Signal | Points |
+|---|---|
+| Cough ≥ 3 weeks | 3 |
+| Coughing up blood (hemoptysis) | 3 |
+| Each of: persistent fever, night sweats, weight loss, chest pain, fatigue, breathlessness | 1 each |
+
+Risk bands: **0–1 Low · 2–4 Moderate · ≥ 5 High**. The band is persisted with every submission and surfaced in the patient dashboard history list.
+
+### Additional capabilities reinforcing the objectives
 
 - **HIPAA Safe-Harbor de-identification** of DICOMs (strips 18 PHI tags + irreversibly hashes patient IDs) — `backend/dicom_sanitizer.py`.
 - **Differential privacy** on every edge node — real `ε` reported from `opacus.PrivacyEngine.get_epsilon(δ=1e-5)` rather than a fabricated constant.
-- **FedProx** proximal term (`loss += (μ/2) · Σ‖w − w_global‖²`) stabilizes training when hospital datasets are non-IID.
-- **Audit trail** of every scan, feedback event, and admin action in `backend/feedback.db` (SQLite) — queryable from the admin dashboard.
+- **Audit trail** of every scan, feedback event, symptom submission, and admin action in `backend/feedback.db` (SQLite) — queryable from the admin dashboard.
 
 ---
 
@@ -211,6 +267,8 @@ Note: `/auth/register` **rejects** `role=admin` — admin accounts can only be c
 | `GET  /care-plan/{stage_id}` | Standalone care pathway lookup (1–4) |
 | `GET  /scans` | List predictions (role-filtered) |
 | `POST /auth/{login,register,logout}` | Session management |
+| `POST /patient/symptoms` | Submit a TB-symptom self-assessment → returns computed risk band |
+| `GET  /patient/symptoms?email=...` | Patient's symptom-assessment history (newest first) |
 | `POST /retrain` | Trigger subprocess federated run |
 | `POST /api/fl/round/start` | Begin an FL round |
 | `POST /api/fl/round/cancel` | Abort active round |

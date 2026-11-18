@@ -326,6 +326,40 @@ export const fetchAdminInfo = async () => {
   }
 };
 
+export const submitSymptomAssessment = async (payload) => {
+  try {
+    const response = await apiClient.post('/patient/symptoms', payload);
+    return { success: true, data: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error.response?.data?.detail ||
+        error.response?.data?.message ||
+        error?.message ||
+        'Failed to submit symptom assessment.',
+    };
+  }
+};
+
+export const fetchSymptomAssessments = async (email, limit = 30) => {
+  try {
+    const response = await apiClient.get(
+      `/patient/symptoms?email=${encodeURIComponent(email)}&limit=${limit}`
+    );
+    return { success: true, data: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error.response?.data?.detail ||
+        error.response?.data?.message ||
+        error?.message ||
+        'Failed to load symptom history.',
+    };
+  }
+};
+
 export const fetchClinicalStats = async () => {
   try {
     const response = await apiClient.get('/analytics/clinical-stats');
